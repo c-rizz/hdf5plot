@@ -1,0 +1,20 @@
+name: hdf5plot 
+base: core22
+summary: A simple utility for plotting data contained in hdf5 files
+description: |
+     HDF5plot is a siple utility for plotting data contained in HDF5 files,
+     it provdes a simple command line utility that allows navigating in simple files. 
+confinement: strict
+version: 0.0.1
+
+apps:
+  hdf5plot:
+    command: hdf5plot
+    # command: /root/prime/bin/python3 -m hdf5plot.hdf5_plotter
+
+parts:
+  hdf5plot:
+    plugin: python
+    source: .
+    python-packages:
+      - .
