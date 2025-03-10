@@ -11,10 +11,15 @@ import os
 from typing import TypeVar
 import shutil
 import math 
+import traceback
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
 
+
+def exc_to_str(exception):
+    # return '\n'.join(traceback.format_exception(etype=type(exception), value=exception, tb=exception.__traceback__))
+    return '\n'.join(traceback.format_exception(exception, value=exception, tb=exception.__traceback__))
 
 def recdict_access(rdict : dict[_K,_V], keylist : list[_K]) -> dict[_K,_V]:
     if len(keylist)==0:
@@ -71,24 +76,24 @@ def cmd_cd(file, current_path, *args, **kwargs):
     """ Move into a the dataset structure as if it was a folder structure. \
         E.g. 'cd data' moves into the 'data' dict and 'cd ..' moves back \
         up the hierarchy."""
-    k = recdict_access(f, current_path).keys()
-    if len(cmd) == 1:
+    k = recdict_access(file, current_path).keys()
+    if len(args) == 1:
         current_path = []                
-    elif cmd[1] == "..":
+    elif args[1] == "..":
         current_path = current_path[:-1]
     else:
-        if cmd[1] in k:
-            new_path = current_path + [cmd[1]]
-            if isinstance(recdict_access(f, current_path), dict):
+        if args[1] in k:
+            new_path = current_path + [args[1]]
+            if isinstance(recdict_access(file, current_path), dict):
                 current_path = new_path
             else:
-                print(f"{cmd[1]} is not dict-like")
+                print(f"{args[1]} is not dict-like")
         else:
-            print(f"{cmd[1]} not found")
+            print(f"{args[1]} not found")
     return current_path, True
 
 def cmd_ls(file, current_path, *args, **kwargs):
-    ks = recdict_access(f, current_path).keys()
+    ks = recdict_access(file, current_path).keys()
     max_k_len = max([len(k) for k in ks]) 
     ks = [(str(k)+" ").rjust(max_k_len) for k in ks]
     elements_per_row = int(shutil.get_terminal_size().columns/max_k_len)
@@ -105,20 +110,21 @@ def cmd_plot(file, current_path, *args, **kwargs):
     if len(args) < 1:
         print(f"Argument missing for plot.")
     print(f"cmd_plot({args})")
-    available_fields = recdict_access(f, current_path).keys()
+    available_fields = recdict_access(file, current_path).keys()
     field : str = ""
-    if cmd[1] in available_fields:
-        field = cmd[1]
+    if args[0] in available_fields:
+        field = args[0]
     else:
         matches = []
-        for af in recdict_access(f, current_path).keys():
-            if  af.startswith(cmd[1]):
+        for af in recdict_access(file, current_path).keys():
+            if  af.startswith(args[0]) and not af.endswith("_labels"):
                 matches.append(af)
         if len(matches)==1:
             field = matches[0]
         else:
             print(f"Possible fields = "+(",".join(matches)))
-    data = np.array(recdict_access(f, current_path+[field]))
+            return current_path, True
+    data = np.array(recdict_access(file, current_path+[field]))
     if len(data.shape) == 1:
         data = np.expand_dims(data,1)
     col_num = data.shape[1]
@@ -154,9 +160,11 @@ def cmd_plot(file, current_path, *args, **kwargs):
                         columns.append(int(g))
     if columns is not None:
         data = data[:,columns]
+    if columns is None:
+        columns = list(range(data.shape[1]))
     maybe_labels_name = field+"_labels"
-    if maybe_labels_name in recdict_access(f, current_path).keys():
-        labels = np.array(recdict_access(f, current_path+[maybe_labels_name]))[0]
+    if maybe_labels_name in recdict_access(file, current_path).keys():
+        labels = np.array(recdict_access(file, current_path+[maybe_labels_name]))[0]
         labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
         print(f"Found {len(labels)} labels {labels}")
         if columns is not None:
@@ -240,6 +248,8 @@ def main():
                         current_path, running = cmd_func(f,current_path, *cmd_args, **kwargs)
                     except Exception as e:
                         print(f"Command failed with exception {e.__class__.__name__}: {e}")
+                        print(exc_to_str(e))
+
                 else:
                     print(f"Command {cmd[0]} not found.")
     except Exception as e:

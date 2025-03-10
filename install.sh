@@ -19,6 +19,7 @@ pip install --upgrade setuptools
 pip install --upgrade wheel
 
 pip install -r "${dname}/requirements.txt"
+pip install "${dname}"
 mkdir -p $HOME/.local/bin
 cp "${dname}/hdf5plot" $HOME/.local/bin
 cp "${dname}/hdf5_plotter.py" $HOME/.hdf5plot/

@@ -1,4 +1,4 @@
 #!/bin/bash
 
 . "$HOME/.hdf5plot/hdf5plotvenv/bin/activate"
-python3 .hdf5plot/hdf5_plotter.py $1
+python3 -m hdf5plot.hdf5_plotter $1
