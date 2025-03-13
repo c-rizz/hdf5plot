@@ -12,6 +12,8 @@ from typing import TypeVar
 import shutil
 import math 
 import traceback
+import mplcursors
+import time
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -45,7 +47,8 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
         labels = [f"{i}" for i in range(series_num)]
         if len(labels)==1:
             labels = labels[0]
-    lines = ax.plot(data, label=labels)
+    linewidth = 2
+    lines = ax.plot(data, label=labels, linewidth=linewidth)
     legend = ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     legend.set_draggable(True)
     ax.set_xlim(xlims)
@@ -68,6 +71,18 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
         legend_line.set_alpha(1.0 if visible else 0.2)
         fig.canvas.draw()
     fig.canvas.mpl_connect('pick_event', on_pick)
+    mplcursors.cursor(lines)
+    # def hover(event):
+    #     t0 = time.monotonic()
+    #     for line in lines:
+    #         if line.contains(event):
+    #             line.set_linewidth(linewidth*2)
+    #             print(f"line {line.get_label()} enlarged")
+    #         else:
+    #             line.set_linewidth(linewidth)
+    #             print(f"line {line.get_label()} not enlarged")
+    #     print(f"hovercallback t = {time.monotonic()-t0}")
+    # fig.canvas.mpl_connect("motion_notify_event", hover)
     # matplotlib.use('TkAgg')
     fig.tight_layout()
     fig.show()
@@ -97,7 +112,7 @@ def cmd_ls(file, current_path, *args, **kwargs):
     max_k_len = max([len(k) for k in ks]) 
     ks = [(str(k)+" ").rjust(max_k_len) for k in ks]
     elements_per_row = int(shutil.get_terminal_size().columns/max_k_len)
-    print('\n'.join([''.join(ks[p:p+elements_per_row]) for p in range(0,math.ceil(len(ks)/elements_per_row), elements_per_row)]))
+    print('\n'.join([''.join(ks[p:p+elements_per_row]) for p in range(0,len(ks), elements_per_row)]))
     return current_path, True
 
 def cmd_quit(file, current_path, *args, **kwargs):
