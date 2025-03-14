@@ -47,7 +47,7 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
         labels = [f"{i}" for i in range(series_num)]
         if len(labels)==1:
             labels = labels[0]
-    linewidth = 2
+    linewidth = 1.5
     lines = ax.plot(data, label=labels, linewidth=linewidth)
     legend = ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     legend.set_draggable(True)
