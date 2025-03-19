@@ -1,5 +1,7 @@
 #!/usr/bin/env python3 
 from __future__ import annotations
+
+import matplotlib.backend_bases
 import h5py
 import argparse
 import matplotlib.axes
@@ -57,18 +59,22 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
     for legend_line, ax_line in zip(legend.get_lines(), lines):
         legend_line.set_picker(5)  # Enable picking on the legend line. (radius at 5pt)
         map_legend_to_ax[legend_line] = ax_line
-    def on_pick(event):
-        # On the pick event, find the original line corresponding to the legend
-        # proxy line, and toggle its visibility.
-        legend_line = event.artist
-        if legend_line not in map_legend_to_ax:
-            return
-        ax_line = map_legend_to_ax[legend_line]
-        visible = not ax_line.get_visible()
-        ax_line.set_visible(visible)
-        # Change the alpha on the line in the legend, so we can see what lines
-        # have been toggled.
-        legend_line.set_alpha(1.0 if visible else 0.2)
+    def on_pick(event : matplotlib.backend_bases.PickEvent):
+        if event.mouseevent.button == matplotlib.backend_bases.MouseButton.LEFT:
+            # On the pick event, find the original line corresponding to the legend
+            # proxy line, and toggle its visibility.
+            legend_line = event.artist
+            if legend_line in map_legend_to_ax:
+                ax_line = map_legend_to_ax[legend_line]
+                visible = not ax_line.get_visible()
+                ax_line.set_visible(visible)
+                # Change the alpha on the line in the legend, so we can see what lines
+                # have been toggled.
+                legend_line.set_alpha(1.0 if visible else 0.2)
+        # elif event.mouseevent.button == matplotlib.backend_bases.MouseButton.RIGHT:
+        #     for legend_line,ax_line in map_legend_to_ax.items():
+        #         ax_line.set_visible(False)
+        #         legend_line.set_alpha(0.2)
         fig.canvas.draw()
     fig.canvas.mpl_connect('pick_event', on_pick)
     mplcursors.cursor(lines)
@@ -77,10 +83,11 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
     #     for line in lines:
     #         if line.contains(event):
     #             line.set_linewidth(linewidth*2)
-    #             print(f"line {line.get_label()} enlarged")
+    #             # print(f"line {line.get_label()} enlarged")
     #         else:
     #             line.set_linewidth(linewidth)
-    #             print(f"line {line.get_label()} not enlarged")
+    #             # print(f"line {line.get_label()} not enlarged")
+    #     fig.canvas.draw()
     #     print(f"hovercallback t = {time.monotonic()-t0}")
     # fig.canvas.mpl_connect("motion_notify_event", hover)
     # matplotlib.use('TkAgg')
@@ -124,7 +131,7 @@ def cmd_plot(file, current_path, *args, **kwargs):
         slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30."""
     if len(args) < 1:
         print(f"Argument missing for plot.")
-    print(f"cmd_plot({args})")
+    # print(f"cmd_plot({args})")
     available_fields = recdict_access(file, current_path).keys()
     field : str = ""
     if args[0] in available_fields:
@@ -139,6 +146,7 @@ def cmd_plot(file, current_path, *args, **kwargs):
         else:
             print(f"Possible fields = "+(",".join(matches)))
             return current_path, True
+    print(f"plotting {field}")
     data = np.array(recdict_access(file, current_path+[field]))
     if len(data.shape) == 1:
         data = np.expand_dims(data,1)
@@ -181,19 +189,19 @@ def cmd_plot(file, current_path, *args, **kwargs):
     if maybe_labels_name in recdict_access(file, current_path).keys():
         labels = np.array(recdict_access(file, current_path+[maybe_labels_name]))[0]
         labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
-        print(f"Found {len(labels)} labels {labels}")
+        # print(f"Found {len(labels)} labels {labels}")
         if columns is not None:
             labels = [labels[i] for i in columns]
         else:
             columns = list(range(col_num))
         n = "\n"
-        print(f"using labels {n.join([f'{i} : {l}' for i,l in zip(columns,labels)])}")
+        print("using labels\n"+f"{n.join([f'{i} : {l}' for i,l in zip(columns,labels)])}")
     else:
         labels = columns
     plot(data, 
          labels=labels, 
          filename = "./plot.pdf", 
-         title = os.path.basename(kwargs["filename"])+"/"+"/".join(current_path),
+         title = os.path.basename(kwargs["filename"])+"/"+"/".join(current_path+[field]),
          xlims=xlims)
     return current_path, True
 
@@ -230,6 +238,7 @@ def main():
             print(f"Not input file provided.")
             input("Press ENTER to exit.")
             exit(0)
+        print("\33]0;HDF5 Plot - "+fname.split("/")[-1]+"\a")
         current_path = []
         running = True
         cmds = {"cd" : cmd_cd,
