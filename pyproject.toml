@@ -18,14 +18,14 @@ classifiers = [
 ]
 
 dependencies = [
-    "h5py==3.11.0",
+    "h5py",
     "matplotlib",
     "numpy",
-    "packaging==24.0",
-    "pillow==10.3.0",
-    "pyparsing==3.1.2",
-    "python-dateutil==2.9.0.post0",
-    "six==1.16.0",
+    "packaging",
+    "pillow",
+    "pyparsing",
+    "python-dateutil",
+    "six",
     "seaborn",
     "PyQt5"
 ]
