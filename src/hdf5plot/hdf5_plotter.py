@@ -191,7 +191,7 @@ def cmd_plot(file, current_path, *args, **kwargs):
         labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
         # print(f"Found {len(labels)} labels {labels}")
         if columns is not None:
-            labels = [labels[i] for i in columns]
+            labels = [labels[i] if i<len(labels) else str(i) for i in columns]
         else:
             columns = list(range(col_num))
         n = "\n"
