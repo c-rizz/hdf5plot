@@ -35,7 +35,7 @@ def _flatten_tensor_tree(src_tree : TensorMapping[T]) -> dict[tuple,T]:
 def to_string_array(strings : list[str] | np.ndarray, max_string_len : int = 32):
     return np.array([list(n.encode("utf-8").ljust(max_string_len)[:max_string_len]) for n in strings], dtype=np.uint8) # ugly, but simple
 
-def dump(filename : str, data : TensorMapping[np.ndarray], labels : TensorMapping[np.ndarray | None] | None = None):
+def save_dict(filename : str, data : TensorMapping[np.ndarray], labels : TensorMapping[np.ndarray | None] | None = None):
     """Dumps the data and labels to an HDF5 file.
 
     Parameters
