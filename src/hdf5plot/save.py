@@ -1,3 +1,4 @@
+from __future__ import annotations
 import h5py
 from typing import Optional, Any, List, Dict, Tuple, Union, Callable, TypeVar, Mapping, Sequence
 import numpy as np
