@@ -16,6 +16,7 @@ import math
 import traceback
 import mplcursors
 import time
+import itertools
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -33,7 +34,7 @@ def recdict_access(rdict : dict[_K,_V], keylist : list[_K]) -> dict[_K,_V]:
 # def multiplot(n_cols_rows, plotnames, datas : dict, filename : dict, labels : dict, titles : dict):
 
 plot_count = 0
-def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
+def plot(data, labels = None, title : str = "HDF5Plot", xlims=None):
     print(f"plotting data with shape {data.shape}")
 
     global plot_count
@@ -71,6 +72,25 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
                 # Change the alpha on the line in the legend, so we can see what lines
                 # have been toggled.
                 legend_line.set_alpha(1.0 if visible else 0.2)
+        elif event.mouseevent.button == matplotlib.backend_bases.MouseButton.RIGHT:
+            # On the pick event, find the original line corresponding to the legend
+            # proxy line, and toggle its visibility.
+            legend_line = event.artist
+            if legend_line in map_legend_to_ax:
+                # Always make the line visible
+                ax_line = map_legend_to_ax[legend_line]
+                ax_line.set_visible(True)
+                alpha = legend_line.get_alpha()
+                # When we hide all others we set alpha to 0.99, just to then recognize the situation
+                hide_all_others = alpha is None or alpha >= 1.0
+                if hide_all_others:
+                    legend_line.set_alpha(0.99)
+                else:
+                    legend_line.set_alpha(1.0)
+                for ll,al in map_legend_to_ax.items():
+                    if ll != legend_line:
+                        ll.set_alpha(0.2 if hide_all_others else 1.0)
+                        al.set_visible(not hide_all_others)
         # elif event.mouseevent.button == matplotlib.backend_bases.MouseButton.RIGHT:
         #     for legend_line,ax_line in map_legend_to_ax.items():
         #         ax_line.set_visible(False)
@@ -91,8 +111,12 @@ def plot(data, filename, labels = None, title : str = "HDF5Plot", xlims=None):
     #     print(f"hovercallback t = {time.monotonic()-t0}")
     # fig.canvas.mpl_connect("motion_notify_event", hover)
     # matplotlib.use('TkAgg')
-    fig.tight_layout()
+    def on_resize(event):
+        fig.tight_layout()
+        fig.canvas.draw()
+    fig.canvas.mpl_connect('resize_event', on_resize)
     fig.show()
+    on_resize(None)
 
 def cmd_cd(file, current_path, *args, **kwargs):
     """ Move into a the dataset structure as if it was a folder structure. \
@@ -131,78 +155,97 @@ def cmd_plot(file, current_path, *args, **kwargs):
         slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30."""
     if len(args) < 1:
         print(f"Argument missing for plot.")
-    # print(f"cmd_plot({args})")
-    available_fields = recdict_access(file, current_path).keys()
-    field : str = ""
-    if args[0] in available_fields:
-        field = args[0]
-    else:
-        matches = []
-        for af in recdict_access(file, current_path).keys():
-            if  af.startswith(args[0]) and not af.endswith("_labels"):
-                matches.append(af)
-        if len(matches)==1:
-            field = matches[0]
+
+    argument_groups = [list(y) for x, y in itertools.groupby(args, lambda z: z.strip() == ";") if not x]
+    plots_tbd = {}
+    for args in argument_groups:
+        # print(f"cmd_plot({args})")
+        available_fields = recdict_access(file, current_path).keys()
+        field : str = ""
+        if args[0] in available_fields:
+            field = args[0]
         else:
-            print(f"Possible fields = "+(",".join(matches)))
-            return current_path, True
-    print(f"plotting {field}")
-    data = np.array(recdict_access(file, current_path+[field]))
-    if len(data.shape) == 1:
-        data = np.expand_dims(data,1)
-    col_num = data.shape[1]
-    columns = None
-    xlims = None
-    if len(args)>=2:
-        columns = []
-        for arg in args[1:]:
-            if arg.startswith("--"):
-                if arg.startswith("--xlims="):
-                    xlims = [int(l) for l in arg[8:].split(",")]
-                else:
-                    print(f"Unrecognized arg {arg}")
+            matches = []
+            for af in recdict_access(file, current_path).keys():
+                if  af.startswith(args[0]) and not af.endswith("_labels"):
+                    matches.append(af)
+            if len(matches)==1:
+                field = matches[0]
             else:
-                groups = arg.split(",") # e.g. "1:4,7:9,11,12" gets split in ["1:4","7:9","11","12"]
-                for g in groups:
-                    if ":" in g:
-                        slice_offset = g.split("+")
-                        if len(slice_offset) == 1: 
-                            slice_offset.append("0")
-                        slice,offset = slice_offset
-                        e = slice.split(":")
-                        if len(e)>3:
-                            raise RuntimeError(f"Invalid slice '{g}'")
-                        if len(e)==2:
-                            e.append("")
-                        if e[0] == "": e[0] = 0
-                        if e[1] == "": e[1] = col_num
-                        if e[2] == "": e[2] = 1
-                        e = [int(es) for es in e]
-                        columns += [c+int(offset) for c in list(range(col_num))[e[0]:e[1]:e[2]]]
+                print(f"Possible fields = "+(",".join(matches)))
+                return current_path, True
+        print(f"plotting {field}")
+        data = np.array(recdict_access(file, current_path+[field]))
+        if len(data.shape) == 1:
+            data = np.expand_dims(data,1)
+        cols_num = data.shape[1]
+        columns = None
+        xlims = None
+        if len(args)>=2:
+            columns = []
+            for arg in args[1:]:
+                if arg.startswith("--"):
+                    if arg.startswith("--xlims="):
+                        xlims = [int(l) for l in arg[8:].split(",")]
                     else:
-                        columns.append(int(g))
-    if columns is not None:
-        data = data[:,columns]
-    if columns is None:
-        columns = list(range(data.shape[1]))
-    maybe_labels_name = field+"_labels"
-    if maybe_labels_name in recdict_access(file, current_path).keys():
-        labels = np.array(recdict_access(file, current_path+[maybe_labels_name]))[0]
-        labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
-        # print(f"Found {len(labels)} labels {labels}")
+                        print(f"Unrecognized arg {arg}")
+                else:
+                    groups = arg.split(",") # e.g. "1:4,7:9,11,12" gets split in ["1:4","7:9","11","12"]
+                    for g in groups:
+                        if ":" in g:
+                            slice_offset = g.split("+")
+                            if len(slice_offset) == 1: 
+                                slice_offset.append("0")
+                            slice,offset = slice_offset
+                            e = slice.split(":")
+                            if len(e)>3:
+                                raise RuntimeError(f"Invalid slice '{g}'")
+                            if len(e)==2:
+                                e.append("")
+                            if e[0] == "": e[0] = 0
+                            if e[1] == "": e[1] = cols_num
+                            if e[2] == "": e[2] = 1
+                            e = [int(es) for es in e]
+                            columns += [c+int(offset) for c in list(range(cols_num))[e[0]:e[1]:e[2]]]
+                        else:
+                            columns.append(int(g))
         if columns is not None:
-            labels = [labels[i] if i<len(labels) else str(i) for i in columns]
+            data = data[:,columns]
+        if columns is None:
+            columns = list(range(data.shape[1]))
+        maybe_labels_name = field+"_labels"
+        if maybe_labels_name in recdict_access(file, current_path).keys():
+            labels = np.array(recdict_access(file, current_path+[maybe_labels_name]))[0]
+            labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
+            # print(f"Found {len(labels)} labels {labels}")
+            if columns is not None:
+                labels = [labels[i] if i<len(labels) else str(i) for i in columns]
+            else:
+                columns = list(range(cols_num))
+            n = "\n"
+            print("using labels\n"+f"{n.join([f'{i} : {l}' for i,l in zip(columns,labels)])}")
         else:
-            columns = list(range(col_num))
-        n = "\n"
-        print("using labels\n"+f"{n.join([f'{i} : {l}' for i,l in zip(columns,labels)])}")
-    else:
-        labels = columns
-    plot(data, 
-         labels=labels, 
-         filename = "./plot.pdf", 
-         title = os.path.basename(kwargs["filename"])+"/"+"/".join(current_path+[field]),
-         xlims=xlims)
+            labels = columns
+        plots_tbd[field] = (data, labels, xlims)
+
+    all_data = None
+    all_fields = []
+    all_labels = []
+    all_xlims = None
+    for field, plot_tbd in plots_tbd.items():
+        all_fields.append(field)
+        if all_data is None:
+            all_data = plot_tbd[0]
+            all_labels = plot_tbd[1]
+            all_xlims = plot_tbd[2]
+        else:
+            all_data = np.hstack((all_data, plot_tbd[0]))
+            all_labels = all_labels + plot_tbd[1]
+            all_xlims = plot_tbd[2]
+    plot(all_data, 
+        labels=all_labels, 
+        title = os.path.basename(kwargs["filename"])+"/"+"/".join(current_path+all_fields),
+        xlims=all_xlims)
     return current_path, True
 
 from collections import defaultdict
