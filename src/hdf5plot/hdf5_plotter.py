@@ -152,7 +152,8 @@ def cmd_quit(file, current_path, *args, **kwargs):
 
 def cmd_plot(file, current_path, *args, **kwargs):
     """ Plot a data element. For example 'plot state_robot 0:96:8+2 --xlims=-1,30' plots from state_robot a
-        slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30."""
+        slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30.
+        You can plot multiple data from multiple fields at once, e.g. 'plot state_robot 0:96:8+2 ; state_goal 0'. """
     if len(args) < 1:
         print(f"Argument missing for plot.")
 
