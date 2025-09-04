@@ -3,3 +3,4 @@ build/*
 *__pycache__*
 virtualenv/*
 *.egg-info*
+.cmd_history.txt

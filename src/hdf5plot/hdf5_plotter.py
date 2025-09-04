@@ -267,6 +267,7 @@ def cmd_help(file, current_path, *args, **kwargs):
               f"    {doc}")
     return current_path, True
 
+history_file = "~/.hdf5plot/.cmd_history.txt"
 def main():
     try:
         ap = argparse.ArgumentParser()
@@ -297,8 +298,15 @@ def main():
             print(f"Content:")
             print(list(recdict_access(f, current_path).keys()))
             cmd_help(f,current_path,cmds = cmds)
+            os.makedirs(os.path.dirname(os.path.abspath(history_file)), exist_ok=True)
             while running:
+                try:
+                    readline.read_history_file(history_file)
+                except FileNotFoundError as e:
+                    pass
                 cmd = input("/"+"/".join(current_path)+"> ")
+                readline.write_history_file(history_file)
+                
                 cmd = " ".join(cmd.split()) # remove repeated spaces
                 cmd = cmd.split(" ")
                 if len(cmd) == 0:
