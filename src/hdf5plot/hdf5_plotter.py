@@ -216,15 +216,19 @@ def cmd_plot(file, current_path, *args, **kwargs):
             columns = list(range(data.shape[1]))
         maybe_labels_name = field+"_labels"
         if maybe_labels_name in recdict_access(file, current_path).keys():
-            labels = np.array(recdict_access(file, current_path+[maybe_labels_name]))[0]
-            labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
-            # print(f"Found {len(labels)} labels {labels}")
-            if columns is not None:
-                labels = [labels[i] if i<len(labels) else str(i) for i in columns]
-            else:
-                columns = list(range(cols_num))
-            n = "\n"
-            print("using labels\n"+f"{n.join([f'{i} : {l}' for i,l in zip(columns,labels)])}")
+            try:
+                labels = np.array(recdict_access(file, current_path+[maybe_labels_name]))[0]
+                labels = [a.tobytes().decode("utf-8").strip() for a in list(labels)]
+                # print(f"Found {len(labels)} labels {labels}")
+                if columns is not None:
+                    labels = [labels[i] if i<len(labels) else str(i) for i in columns]
+                else:
+                    columns = list(range(cols_num))
+                n = "\n"
+                print("using labels\n"+f"{n.join([f'{i} : {l}' for i,l in zip(columns,labels)])}")
+            except Exception as e:
+                print(f"Failed to get labels from {maybe_labels_name} with exception {e.__class__.__name__}: {e}")
+                labels = columns
         else:
             labels = columns
         plots_tbd[field] = (data, labels, xlims)
