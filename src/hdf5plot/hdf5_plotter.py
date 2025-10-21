@@ -112,7 +112,7 @@ def plot(data, labels = None, title : str = "HDF5Plot", xlims=None):
     # fig.canvas.mpl_connect("motion_notify_event", hover)
     # matplotlib.use('TkAgg')
     def on_resize(event):
-        fig.tight_layout()
+        fig.set_layout_engine('constrained')
         fig.canvas.draw()
     fig.canvas.mpl_connect('resize_event', on_resize)
     fig.show()
