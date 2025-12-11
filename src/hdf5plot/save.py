@@ -1,7 +1,10 @@
 from __future__ import annotations
 import h5py
+import io
 from typing import Optional, Any, List, Dict, Tuple, Union, Callable, TypeVar, Mapping, Sequence
 import numpy as np
+import os
+from zipfile import ZipFile, ZIP_DEFLATED
 
 LeafType = TypeVar("LeafType")
 TensorMapping = Union[Mapping[Any,"TensorMapping[LeafType]"], LeafType]
@@ -36,7 +39,10 @@ def _flatten_tensor_tree(src_tree : TensorMapping[T]) -> dict[tuple,T]:
 def to_string_array(strings : list[str] | np.ndarray, max_string_len : int = 32):
     return np.array([list(n.encode("utf-8").ljust(max_string_len)[:max_string_len]) for n in strings], dtype=np.uint8) # ugly, but simple
 
-def save_dict(filename : str, data : TensorMapping[np.ndarray], labels : TensorMapping[np.ndarray | None] | None = None):
+def save_dict(filename : str,
+              data : TensorMapping[np.ndarray],
+              labels : TensorMapping[np.ndarray | None] | None = None,
+              compress : bool = True):
     """Dumps the data and labels to an HDF5 file.
 
     Parameters
@@ -54,11 +60,17 @@ def save_dict(filename : str, data : TensorMapping[np.ndarray], labels : TensorM
         labels = _flatten_tensor_tree(labels)
         labels = {k:np.expand_dims(v, axis=0) if v is not None else None for k,v in labels.items()}
 
-    with h5py.File(filename, "w") as f:
+    buffer = io.BytesIO()
+    with h5py.File(buffer, "w", driver="fileobj") as f:
         for k,v in data.items():
             field_name = ".".join(k)
             f.create_dataset(field_name, data=v)
             if labels is not None and k in labels and labels[k] is not None:
                 f.create_dataset(field_name+"_labels", data=labels[k])
-
-
+    if compress:
+        zip_filename = filename if filename.endswith(".h5zip") else filename + ".h5zip"
+        with ZipFile(zip_filename, mode="w", compression=ZIP_DEFLATED) as zf:
+            zf.writestr("data.hdf5", buffer.getvalue())
+    else:
+        with open(filename, "wb") as fh:
+            fh.write(buffer.getvalue())

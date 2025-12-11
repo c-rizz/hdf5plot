@@ -1,6 +1,7 @@
 #!/usr/bin/env python3 
 from __future__ import annotations
 
+import io
 import matplotlib.backend_bases
 import h5py
 import argparse
@@ -17,6 +18,7 @@ import traceback
 import mplcursors
 import time
 import itertools
+import zipfile
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -298,8 +300,20 @@ def main():
                 "plot" : cmd_plot,
                 "p" : cmd_plot,
                 "help" : cmd_help}
-        with h5py.File(fname, "r") as f:
-            print(f"Opened file {fname}")
+
+        file_obj = fname
+        inner_name = None
+        driver = None
+        if zipfile.is_zipfile(fname):
+            with zipfile.ZipFile(fname, "r") as zf:
+                data = zf.read("data.hdf5")
+            file_obj = io.BytesIO(data)
+            driver = "fileobj"
+
+
+        with h5py.File(file_obj, "r", driver=driver) as f:
+            opened_msg = fname if inner_name is None else f"{fname} (inner: {inner_name})"
+            print(f"Opened file {opened_msg}")
             print(f"Content:")
             print(list(recdict_access(f, current_path).keys()))
             cmd_help(f,current_path,cmds = cmds)
