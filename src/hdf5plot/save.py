@@ -64,6 +64,9 @@ def save_dict(filename : str,
     with h5py.File(buffer, "w", driver="fileobj") as f:
         for k,v in data.items():
             field_name = ".".join(k)
+            field_name = field_name.replace("/", "#") # in h5py "/" has a special meaning
+            field_name = field_name.replace(".", "#") # in h5py "." has a special meaning?
+            # print(f"Saving dataset: {field_name}")
             f.create_dataset(field_name, data=v)
             if labels is not None and k in labels and labels[k] is not None:
                 f.create_dataset(field_name+"_labels", data=labels[k])
