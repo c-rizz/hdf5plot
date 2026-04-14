@@ -1,9 +1,10 @@
 [Desktop Entry]
 Name=HDF5Plot
-Exec=/bin/sh -c "$HOME/.local/bin/hdf5plot %F"
-Terminal=true
+Exec=gnome-terminal --class=hdf5plotter --name=HDF5Plot -- sh -c "$HOME/.local/bin/hdf5plot %F"
+Terminal=false
 Type=Application
 #Icon=boh
 Categories=Utility;
 StartupNotify=false
+StartupWMClass=hdf5plotter
 #MimeType=text/english;text/plain;text/x-makefile;text/x-c++hdr;text/x-c++src;text/x-chdr;text/x-csrc;text/x-java;text/x-moc;text/x-pascal;text/x-tcl;text/x-tex;application/x-shellscript;text/x-c;text/x-c++;
