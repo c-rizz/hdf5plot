@@ -175,7 +175,7 @@ def cmd_plot(file, current_path, *args, **kwargs):
             if len(matches)==1:
                 field = matches[0]
             else:
-                print(f"Possible fields = "+(",".join(matches)))
+                print(f"Possible fields = "+(" ; ".join(matches)))
                 return current_path, True
         print(f"plotting {field}")
         data = np.array(recdict_access(file, current_path+[field]))
