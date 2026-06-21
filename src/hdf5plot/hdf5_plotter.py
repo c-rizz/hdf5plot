@@ -36,7 +36,7 @@ def recdict_access(rdict : dict[_K,_V], keylist : list[_K]) -> dict[_K,_V]:
 # def multiplot(n_cols_rows, plotnames, datas : dict, filename : dict, labels : dict, titles : dict):
 
 plot_count = 0
-def plot(data, labels = None, title : str = "HDF5Plot", xlims=None):
+def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : bool = False):
     print(f"plotting data with shape {data.shape}")
 
     global plot_count
@@ -57,6 +57,13 @@ def plot(data, labels = None, title : str = "HDF5Plot", xlims=None):
     legend = ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     legend.set_draggable(True)
     ax.set_xlim(xlims)
+
+    if print_raw:
+        np.set_printoptions(precision=3, suppress=True)
+        print("raw data:")
+        for i in range(data.shape[1]):
+            print(f"series {i} : {labels[i] if labels is not None else ''}")
+            print(data[:,i])
 
     map_legend_to_ax = {}  # Will map legend lines to original lines.
     for legend_line, ax_line in zip(legend.get_lines(), lines):
@@ -251,7 +258,8 @@ def cmd_plot(file, current_path, *args, **kwargs):
     plot(all_data, 
         labels=all_labels, 
         title = os.path.basename(kwargs["filename"])+"/["+",".join(current_path+all_fields)+"]",
-        xlims=all_xlims)
+        xlims=all_xlims,
+        print_raw = False)
     return current_path, True
 
 from collections import defaultdict
