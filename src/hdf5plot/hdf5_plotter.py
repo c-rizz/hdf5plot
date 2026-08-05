@@ -505,15 +505,31 @@ def main():
                 readline.parse_and_bind("tab: complete")  # GNU readline syntax
 
             os.makedirs(os.path.dirname(history_file), exist_ok=True)
-            while running:
+            readline.set_history_length(100)
+            # load history once, up front: read_history_file appends into the in-memory
+            # history rather than replacing it, so calling it on every loop iteration (as
+            # this used to) re-appends the whole file every command, making it grow without
+            # bound until the readline backend can no longer parse it back
+            try:
+                readline.read_history_file(history_file)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                # the history file can end up in a format the current readline backend
+                # (e.g. libedit vs GNU readline) can't parse; drop it rather than crash
+                print(f"History file unreadable ({e}), resetting it.")
                 try:
-                    readline.read_history_file(history_file)
-                except FileNotFoundError as e:
+                    os.remove(history_file)
+                except OSError:
                     pass
+
+            while running:
                 cmd = input("/"+"/".join(current_path)+"> ")
-                readline.set_history_length(100)
-                readline.write_history_file(history_file)
-                
+                try:
+                    readline.write_history_file(history_file)
+                except OSError as e:
+                    print(f"Could not save command history ({e}).")
+
                 cmd = " ".join(cmd.split()) # remove repeated spaces
                 cmd = cmd.split(" ")
                 if len(cmd) == 0:
