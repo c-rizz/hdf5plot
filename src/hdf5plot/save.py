@@ -5,6 +5,7 @@ from typing import Optional, Any, List, Dict, Tuple, Union, Callable, TypeVar, M
 import numpy as np
 import os
 from zipfile import ZipFile, ZIP_DEFLATED
+import logging
 
 LeafType = TypeVar("LeafType")
 TensorMapping = Union[Mapping[Any,"TensorMapping[LeafType]"], LeafType]
@@ -60,17 +61,20 @@ def save_dict(filename : str,
         labels = _flatten_tensor_tree(labels)
         for k,v in labels.items():
             # print(f"Processing labels for key {k}, type={type(v)}, dtype={v.dtype if isinstance(v, np.ndarray) else 'N/A'}, kind={v.dtype.kind if isinstance(v, np.ndarray) else 'N/A'}")
-            if isinstance(v, list) or (isinstance(v, np.ndarray) and v.dtype.kind == "O"):
-                v = to_string_array(v)
-            elif isinstance(v, np.ndarray) and v.dtype.kind in ("U", "O"):
-                v = to_string_array([str(x) for x in np.asarray(v).ravel()])
-            elif v is None:
-                pass
-            elif isinstance(v, np.ndarray) and v.dtype == np.uint8:
-                pass
-            else:
-                raise ValueError(f"Labels must be strings or arrays of strings, got {type(v)} with dtype {v.dtype if isinstance(v, np.ndarray) else 'N/A'} for key {k}")            
-            labels[k] = v
+            try:
+                if isinstance(v, list) or (isinstance(v, np.ndarray) and v.dtype.kind == "O"):
+                    v = to_string_array(v)
+                elif isinstance(v, np.ndarray) and v.dtype.kind in ("U", "O"):
+                    v = to_string_array([str(x) for x in np.asarray(v).ravel()])
+                elif v is None:
+                    pass
+                elif isinstance(v, np.ndarray) and v.dtype == np.uint8:
+                    pass
+                else:
+                    raise ValueError(f"Labels must be strings or arrays of strings, got {type(v)} with dtype {v.dtype if isinstance(v, np.ndarray) else 'N/A'} for key {k}")            
+                labels[k] = v
+            except Exception as e:
+                logging.warning(f"Error processing labels for key {k}: {e}")
         labels = {k:np.expand_dims(v, axis=0) if v is not None else None for k,v in labels.items()}
 
     buffer = io.BytesIO()
