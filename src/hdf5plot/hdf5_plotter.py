@@ -6,6 +6,7 @@ import matplotlib.backend_bases
 import h5py
 import argparse
 import matplotlib.axes
+import matplotlib.widgets
 import matplotlib.pyplot as plt
 import numpy as np
 import readline # enables better input() features (arrow keys, history)
@@ -148,15 +149,39 @@ def cmd_cd(file, current_path, *args, **kwargs):
     return current_path, True
 
 def cmd_ls(file, current_path, *args, **kwargs):
+    prefix = args[0] if len(args)>0 else ""
     ks = recdict_access(file, current_path).keys()
     max_k_len = max([len(k) for k in ks]) 
-    ks = [(str(k)+" ").rjust(max_k_len) for k in ks]
+    ks = [(str(k)).rjust(max_k_len) for k in ks]
+    ks = [k for k in ks if k.strip().startswith(prefix.strip())]
     elements_per_row = int(shutil.get_terminal_size().columns/max_k_len)
     print('\n'.join([''.join(ks[p:p+elements_per_row]) for p in range(0,len(ks), elements_per_row)]))
     return current_path, True
 
 def cmd_quit(file, current_path, *args, **kwargs):
     return current_path, False
+
+
+def cmd_info(file, current_path, *args, **kwargs):
+    """ Show information about a data element. E.g. 'info state_robot' prints its shape. """
+    if len(args) < 1:
+        print(f"Argument missing for info.")
+        return current_path, True
+    available_fields = recdict_access(file, current_path).keys()
+    field = args[0]
+    if field not in available_fields:
+        matches = [af for af in available_fields if af.startswith(field)]
+        if len(matches) == 1:
+            field = matches[0]
+        else:
+            print(f"Possible fields = " + (" ; ".join(matches)))
+            return current_path, True
+    element = recdict_access(file, current_path + [field])
+    if hasattr(element, "shape"):
+        print(f"{field} shape: {element.shape}")
+    else:
+        print(f"{field} has no shape (not a dataset).")
+    return current_path, True
 
 
 def cmd_plot(file, current_path, *args, **kwargs):
@@ -262,6 +287,112 @@ def cmd_plot(file, current_path, *args, **kwargs):
         print_raw = False)
     return current_path, True
 
+img_count = 0
+def show_frames(frames, title : str = "HDF5Plot", vmin : float = None, vmax : float = None):
+    print(f"showing {frames.shape[0]} frames of shape {frames.shape[1:]}")
+    global img_count
+    img_count += 1
+    n_frames, c, h, w = frames.shape
+
+    def to_image(idx):
+        frame = frames[idx]
+        if c == 1:
+            return frame[0]
+        if c in (3, 4):
+            return np.transpose(frame, (1, 2, 0))
+        print(f"Cannot display {c} channels as an image, showing channel 0 only.")
+        return frame[0]
+
+    print(f"pixel values: dtype={frames.dtype}, min={frames.min()}, max={frames.max()}")
+
+    fig, ax = plt.subplots(num=title+str(img_count))
+    fig.subplots_adjust(bottom=0.2)
+    ax.set_title(f"{title} - frame 0/{n_frames-1}")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if vmin is None:
+        vmin = float(frames.min())
+    if vmax is None:
+        vmax = float(frames.max())
+    print(f"scaling pixel values with vmin={vmin}, vmax={vmax}")
+    im = ax.imshow(to_image(0), cmap="gray" if c == 1 else None, vmin=vmin, vmax=vmax)
+
+    def format_coord(x, y):
+        col, row = int(round(x)), int(round(y))
+        img = im.get_array()
+        if 0 <= row < img.shape[0] and 0 <= col < img.shape[1]:
+            return f"x={col}, y={row}, value={img[row, col]}"
+        return f"x={x:.1f}, y={y:.1f}"
+    ax.format_coord = format_coord
+
+    cursor = mplcursors.cursor(im, hover=True)
+    @cursor.connect("add")
+    def on_add(sel):
+        col, row = int(round(sel.target[0])), int(round(sel.target[1]))
+        img = im.get_array()
+        if 0 <= row < img.shape[0] and 0 <= col < img.shape[1]:
+            sel.annotation.set_text(f"({col}, {row}): {img[row, col]}")
+
+    slider_ax = fig.add_axes([0.2, 0.05, 0.6, 0.03])
+    slider = matplotlib.widgets.Slider(slider_ax, "Frame", 0, n_frames-1, valinit=0, valstep=1)
+    def update(val):
+        idx = int(slider.val)
+        im.set_data(to_image(idx))
+        ax.set_title(f"{title} - frame {idx}/{n_frames-1}")
+        fig.canvas.draw_idle()
+    slider.on_changed(update)
+    fig._hdf5plot_slider = slider  # keep a reference alive, otherwise the slider stops responding
+    fig.show()
+
+def cmd_img(file, current_path, *args, **kwargs):
+    """ Draw a data element as a sequence of images, with a slider to scroll through frames. \
+        E.g. 'img camera_obs 1x64x64' interprets each row of camera_obs as a CxHxW image \
+        with 1 channel, 64 height and 64 width. \
+        By default pixel values are scaled using the data's own min/max. Use --range=0,1 or \
+        --range=0,255 (or any other pair of values) to set the scaling explicitly. """
+    if len(args) < 2:
+        print(f"Usage: img <field> <channels>x<height>x<width> [--range=<min>,<max>]")
+        return current_path, True
+    available_fields = recdict_access(file, current_path).keys()
+    field = args[0]
+    if field not in available_fields:
+        matches = [af for af in available_fields if af.startswith(field)]
+        if len(matches) == 1:
+            field = matches[0]
+        else:
+            print(f"Possible fields = " + (" ; ".join(matches)))
+            return current_path, True
+    sep = "x" if "x" in args[1] else ","
+    try:
+        c, h, w = [int(s) for s in args[1].split(sep)]
+    except ValueError:
+        print(f"Invalid shape '{args[1]}', expected e.g. 1x64x64")
+        return current_path, True
+
+    vmin, vmax = None, None
+    for arg in args[2:]:
+        if arg.startswith("--range="):
+            vrange = arg[len("--range="):].split(",")
+            if len(vrange) != 2:
+                print(f"Invalid --range '{arg}', expected e.g. --range=0,1")
+                return current_path, True
+            vmin, vmax = float(vrange[0]), float(vrange[1])
+        else:
+            print(f"Unrecognized arg {arg}")
+
+    data = np.array(recdict_access(file, current_path+[field]))
+    if data.ndim == 1:
+        data = np.expand_dims(data, 0)
+    frame_size = c*h*w
+    if data.shape[-1] != frame_size:
+        print(f"Field '{field}' last dim is {data.shape[-1]}, doesn't match {c}x{h}x{w} = {frame_size}")
+        return current_path, True
+    frames = data.reshape(data.shape[0], c, h, w)
+    show_frames(frames,
+        title=os.path.basename(kwargs["filename"])+"/["+",".join(current_path+[field])+"]",
+        vmin=vmin, vmax=vmax)
+    return current_path, True
+
 from collections import defaultdict
 def cmd_help(file, current_path, *args, **kwargs):
     """ This help command. """
@@ -280,6 +411,30 @@ def cmd_help(file, current_path, *args, **kwargs):
         print(f" - {', '.join(cmd_names)} :\n"
               f"    {doc}")
     return current_path, True
+
+def print_progress(current : int, total : int, prefix : str = "Loading", bar_len : int = 30):
+    frac = min(current/total, 1.0) if total > 0 else 1.0
+    filled = int(bar_len*frac)
+    bar = "#"*filled + "-"*(bar_len-filled)
+    mb_current, mb_total = current/(1024*1024), total/(1024*1024)
+    print(f"\r{prefix} [{bar}] {frac*100:5.1f}% ({mb_current:.1f}/{mb_total:.1f} MB)", end="", flush=True)
+    if current >= total:
+        print()
+
+def read_zip_member_with_progress(zf : zipfile.ZipFile, member_name : str, chunk_size : int = 4*1024*1024) -> bytes:
+    total = zf.getinfo(member_name).file_size
+    read = 0
+    chunks = []
+    print_progress(read, total)
+    with zf.open(member_name) as member:
+        while True:
+            chunk = member.read(chunk_size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            read += len(chunk)
+            print_progress(read, total)
+    return b"".join(chunks)
 
 history_file = os.path.abspath(os.path.expanduser("~/.hdf5plot/.cmd_history.txt"))
 def main():
@@ -306,6 +461,8 @@ def main():
                 "q" : cmd_quit,
                 "plot" : cmd_plot,
                 "p" : cmd_plot,
+                "img" : cmd_img,
+                "info" : cmd_info,
                 "help" : cmd_help}
 
         file_obj = fname
@@ -313,7 +470,7 @@ def main():
         driver = None
         if zipfile.is_zipfile(fname):
             with zipfile.ZipFile(fname, "r") as zf:
-                data = zf.read("data.hdf5")
+                data = read_zip_member_with_progress(zf, "data.hdf5")
             file_obj = io.BytesIO(data)
             driver = "fileobj"
 
@@ -324,16 +481,55 @@ def main():
             print(f"Content:")
             print(list(recdict_access(f, current_path).keys()))
             cmd_help(f,current_path,cmds = cmds)
+
+            def completer(text, state):
+                buffer = readline.get_line_buffer()
+                tokens = buffer.split()
+                completing_first_token = len(tokens) == 0 or (len(tokens) == 1 and not buffer.endswith(" "))
+                if completing_first_token:
+                    options = sorted(c for c in cmds.keys() if c.startswith(text))
+                else:
+                    try:
+                        options = [str(k) for k in recdict_access(f, current_path).keys()]
+                    except Exception:
+                        options = []
+                    if tokens[0] == "cd":
+                        options.append("..")
+                    options = sorted(o for o in options if o.startswith(text))
+                return options[state] if state < len(options) else None
+            readline.set_completer(completer)
+            readline.set_completer_delims(" \t\n")
+            if readline.__doc__ and "libedit" in readline.__doc__:
+                readline.parse_and_bind("bind ^I rl_complete")  # libedit (e.g. macOS) syntax
+            else:
+                readline.parse_and_bind("tab: complete")  # GNU readline syntax
+
             os.makedirs(os.path.dirname(history_file), exist_ok=True)
-            while running:
+            readline.set_history_length(100)
+            # load history once, up front: read_history_file appends into the in-memory
+            # history rather than replacing it, so calling it on every loop iteration (as
+            # this used to) re-appends the whole file every command, making it grow without
+            # bound until the readline backend can no longer parse it back
+            try:
+                readline.read_history_file(history_file)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                # the history file can end up in a format the current readline backend
+                # (e.g. libedit vs GNU readline) can't parse; drop it rather than crash
+                print(f"History file unreadable ({e}), resetting it.")
                 try:
-                    readline.read_history_file(history_file)
-                except FileNotFoundError as e:
+                    os.remove(history_file)
+                except OSError:
                     pass
+
+            while running:
                 cmd = input("/"+"/".join(current_path)+"> ")
-                readline.set_history_length(100)
-                readline.write_history_file(history_file)
-                
+                try:
+                    readline.write_history_file(history_file)
+                except OSError as e:
+                    print(f"Could not save command history ({e}).")
+
                 cmd = " ".join(cmd.split()) # remove repeated spaces
                 cmd = cmd.split(" ")
                 if len(cmd) == 0:
@@ -355,7 +551,7 @@ def main():
                 else:
                     print(f"Command {cmd[0]} not found.")
     except Exception as e:
-        print(f"Failed with exception: {e}")
+        print(f"Failed with exception: {exc_to_str(e)}")
         input("Press ENTER to close")
 
 
