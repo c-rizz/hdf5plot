@@ -38,6 +38,23 @@ def recdict_access(rdict : dict[_K,_V], keylist : list[_K]) -> dict[_K,_V]:
 
 plot_count = 0
 def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : bool = False):
+    """ Plots a data array of shape (K,N), where K is the number of data points per series and
+    N is the number of data series. I.e. 12 joint positions evolving over 100 timesteps
+    would be a data array of shape (100,12).
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Array of shape (K,N) (or (K,) for a single series) with K points for each of the N series.
+    labels : list[str], optional
+        One label per series, used in the legend. If None, series are labeled by their index.
+    title : str, optional
+        Title of the plot window and axes, by default "HDF5Plot".
+    xlims : tuple[float, float], optional
+        (min, max) limits for the x axis, by default None (auto).
+    print_raw : bool, optional
+        If True, also print each series' raw values to stdout, by default False.
+    """
     print(f"plotting data with shape {data.shape}")
 
     global plot_count
@@ -128,6 +145,69 @@ def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : 
     fig.show()
     on_resize(None)
 
+hist_count = 0
+def hist(data, title : str = "HDF5Plot", bins : int = 50, xlims=None, print_raw : bool = False):
+    """ Plots a histogram of a data array, in the wandb style: for a 2D input of shape (K,N)
+    (K timesteps, N values per timestep), a histogram over the N values is computed at each
+    of the K timesteps and the result is displayed as a heatmap, with time on the x axis,
+    the histogram bins on the y axis, and color indicating the count in each bin. This shows
+    how the distribution of the N values evolves over time.
+
+    If there is only a single timestep (K==1, or a 1D input of shape (N,)), there is no time
+    axis to build a heatmap over, so a normal histogram of the N values is plotted instead.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Array of shape (K,N) (or (N,) for a single sample) with K timesteps and N values per timestep.
+    title : str, optional
+        Title of the plot window and axes, by default "HDF5Plot".
+    bins : int, optional
+        Number of histogram bins, by default 50.
+    xlims : tuple[float, float], optional
+        (min, max) limits for the value axis the histogram bins span, by default None (auto).
+    print_raw : bool, optional
+        If True, also print the raw data to stdout, by default False.
+    """
+    print(f"plotting histogram of data with shape {data.shape}")
+
+    global hist_count
+    hist_count += 1
+    ax : matplotlib.axes.Axes
+    fig, ax = plt.subplots(num=title+"_hist"+str(hist_count))
+    ax.grid(True, linestyle=":")
+    ax.set_title(title)
+
+    if len(data.shape) == 1:
+        data = np.expand_dims(data, 0)
+    timesteps_num = data.shape[0]
+    vmin, vmax = xlims if xlims is not None else (float(np.min(data)), float(np.max(data)))
+
+    if timesteps_num == 1:
+        ax.hist(data[0], bins=bins, range=(vmin, vmax))
+        ax.set_xlabel("value")
+        ax.set_ylabel("count")
+    else:
+        bin_edges = np.linspace(vmin, vmax, bins + 1)
+        heatmap = np.stack([np.histogram(data[t], bins=bin_edges)[0] for t in range(timesteps_num)], axis=1)
+        im = ax.imshow(heatmap, origin="lower", aspect="auto",
+                        extent=(0, timesteps_num, vmin, vmax), cmap="viridis")
+        fig.colorbar(im, ax=ax, label="count")
+        ax.set_xlabel("timestep")
+        ax.set_ylabel("value")
+
+    if print_raw:
+        np.set_printoptions(precision=3, suppress=True)
+        print("raw data:")
+        print(data)
+
+    def on_resize(event):
+        fig.set_layout_engine('constrained')
+        fig.canvas.draw()
+    fig.canvas.mpl_connect('resize_event', on_resize)
+    fig.show()
+    on_resize(None)
+
 def cmd_cd(file, current_path, *args, **kwargs):
     """ Move into a the dataset structure as if it was a folder structure. \
         E.g. 'cd data' moves into the 'data' dict and 'cd ..' moves back \
@@ -184,17 +264,14 @@ def cmd_info(file, current_path, *args, **kwargs):
     return current_path, True
 
 
-def cmd_plot(file, current_path, *args, **kwargs):
-    """ Plot a data element. For example 'plot state_robot 0:96:8+2 --xlims=-1,30' plots from state_robot a
-        slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30.
-        You can plot multiple data from multiple fields at once, e.g. 'plot state_robot 0:96:8+2 ; state_goal 0'. """
-    if len(args) < 1:
-        print(f"Argument missing for plot.")
-
-    argument_groups = [list(y) for x, y in itertools.groupby(args, lambda z: z.strip() == ";") if not x]
-    plots_tbd = {}
+def _select_field_data(file, current_path, argument_groups, lims_arg_name="--xlims="):
+    """ Shared field/column selection and slicing logic used by cmd_plot and cmd_hist.
+    Resolves each argument group to a field (by exact match or unambiguous prefix), applies
+    the requested column slicing, and resolves the field's labels if available.
+    Returns a dict field -> (data, labels, lims), or None if a field could not be resolved
+    (an error has already been printed in that case, and the caller should just return). """
+    fields_tbd = {}
     for args in argument_groups:
-        # print(f"cmd_plot({args})")
         available_fields = recdict_access(file, current_path).keys()
         field : str = ""
         if args[0] in available_fields:
@@ -208,20 +285,20 @@ def cmd_plot(file, current_path, *args, **kwargs):
                 field = matches[0]
             else:
                 print(f"Possible fields = "+(" ; ".join(matches)))
-                return current_path, True
-        print(f"plotting {field}")
+                return None
+        print(f"selected {field}")
         data = np.array(recdict_access(file, current_path+[field]))
         if len(data.shape) == 1:
             data = np.expand_dims(data,1)
         cols_num = data.shape[1]
         columns = None
-        xlims = None
+        lims = None
         if len(args)>=2:
             columns = []
             for arg in args[1:]:
                 if arg.startswith("--"):
-                    if arg.startswith("--xlims="):
-                        xlims = [int(l) for l in arg[8:].split(",")]
+                    if arg.startswith(lims_arg_name):
+                        lims = [int(l) for l in arg[len(lims_arg_name):].split(",")]
                     else:
                         print(f"Unrecognized arg {arg}")
                 else:
@@ -229,7 +306,7 @@ def cmd_plot(file, current_path, *args, **kwargs):
                     for g in groups:
                         if ":" in g:
                             slice_offset = g.split("+")
-                            if len(slice_offset) == 1: 
+                            if len(slice_offset) == 1:
                                 slice_offset.append("0")
                             slice,offset = slice_offset
                             e = slice.split(":")
@@ -264,7 +341,20 @@ def cmd_plot(file, current_path, *args, **kwargs):
                 labels = default_columns
         else:
             labels = default_columns
-        plots_tbd[field] = (data, labels, xlims)
+        fields_tbd[field] = (data, labels, lims)
+    return fields_tbd
+
+def cmd_plot(file, current_path, *args, **kwargs):
+    """ Plot a data element. For example 'plot state_robot 0:96:8+2 --xlims=-1,30' plots from state_robot a
+        slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30.
+        You can plot multiple data from multiple fields at once, e.g. 'plot state_robot 0:96:8+2 ; state_goal 0'. """
+    if len(args) < 1:
+        print(f"Argument missing for plot.")
+
+    argument_groups = [list(y) for x, y in itertools.groupby(args, lambda z: z.strip() == ";") if not x]
+    plots_tbd = _select_field_data(file, current_path, argument_groups, lims_arg_name="--xlims=")
+    if plots_tbd is None:
+        return current_path, True
 
     all_data = None
     all_fields = []
@@ -280,8 +370,39 @@ def cmd_plot(file, current_path, *args, **kwargs):
             all_data = np.hstack((all_data, plot_tbd[0]))
             all_labels = all_labels + plot_tbd[1]
             all_xlims = plot_tbd[2]
-    plot(all_data, 
-        labels=all_labels, 
+    plot(all_data,
+        labels=all_labels,
+        title = os.path.basename(kwargs["filename"])+"/["+",".join(current_path+all_fields)+"]",
+        xlims=all_xlims,
+        print_raw = False)
+    return current_path, True
+
+def cmd_hist(file, current_path, *args, **kwargs):
+    """ Plot a data element as a histogram, wandb-style: if the selected data spans multiple
+        timesteps, a histogram is computed at each timestep and shown as a heatmap over time;
+        otherwise a normal histogram is shown. For example 'hist state_robot 0:96:8+2 --xlims=-1,30'
+        histograms state_robot's slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...),
+        with value axis limits -1 and 30. You can combine data from multiple fields into the same
+        histogram at once, e.g. 'hist state_robot 0:96:8+2 ; state_goal 0'. """
+    if len(args) < 1:
+        print(f"Argument missing for hist.")
+
+    argument_groups = [list(y) for x, y in itertools.groupby(args, lambda z: z.strip() == ";") if not x]
+    hists_tbd = _select_field_data(file, current_path, argument_groups, lims_arg_name="--xlims=")
+    if hists_tbd is None:
+        return current_path, True
+
+    all_data = None
+    all_fields = []
+    all_xlims = None
+    for field, hist_tbd in hists_tbd.items():
+        all_fields.append(field)
+        if all_data is None:
+            all_data = hist_tbd[0]
+        else:
+            all_data = np.hstack((all_data, hist_tbd[0]))
+        all_xlims = hist_tbd[2]
+    hist(all_data,
         title = os.path.basename(kwargs["filename"])+"/["+",".join(current_path+all_fields)+"]",
         xlims=all_xlims,
         print_raw = False)
@@ -461,6 +582,8 @@ def main():
                 "q" : cmd_quit,
                 "plot" : cmd_plot,
                 "p" : cmd_plot,
+                "hist" : cmd_hist,
+                "h" : cmd_hist,
                 "img" : cmd_img,
                 "info" : cmd_info,
                 "help" : cmd_help}
