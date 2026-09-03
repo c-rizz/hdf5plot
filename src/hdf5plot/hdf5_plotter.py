@@ -20,6 +20,8 @@ import mplcursors
 import time
 import itertools
 import zipfile
+import glob
+import contextlib
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -34,10 +36,52 @@ def recdict_access(rdict : dict[_K,_V], keylist : list[_K]) -> dict[_K,_V]:
         return rdict
     return recdict_access(rdict[keylist[0]], keylist[1:])
 
+class MultiFileDataset:
+    """ A virtual dataset stacking the same-named dataset read from multiple hdf5 files along a
+    new leading axis (one row per file, in file order). Converting it to a numpy array (which
+    np.array(...) does automatically via __array__, e.g. in _select_field_data/cmd_img) reads
+    and stacks the underlying per-file datasets; if their shapes don't match, numpy raises a
+    clear error at that point ("all input arrays must have the same shape"). """
+    def __init__(self, datasets : list, fnames : list[str]):
+        self._datasets = datasets
+        self._fnames = fnames
+
+    @property
+    def shape(self):
+        # Reports the first file's shape with the files axis prepended; does not itself
+        # validate that all files agree (that happens lazily in __array__).
+        return (len(self._datasets),) + self._datasets[0].shape
+
+    @property
+    def dtype(self):
+        return self._datasets[0].dtype
+
+    def __array__(self, dtype=None):
+        arr = np.stack([np.asarray(ds) for ds in self._datasets])
+        return arr if dtype is None else arr.astype(dtype)
+
+class MultiFileGroup:
+    """ A virtual group merging the same path across multiple hdf5 files, so that navigation and
+    field access (cd/ls/plot/hist/img/info) work the same way as on a single h5py.File, except
+    each leaf dataset appears as a MultiFileDataset stacking all files' data along a new leading
+    (per-file) axis. Field listing uses the first file as the canonical set of fields. """
+    def __init__(self, groups : list, fnames : list[str]):
+        self._groups = groups
+        self._fnames = fnames
+
+    def keys(self):
+        return self._groups[0].keys()
+
+    def __getitem__(self, key):
+        children = [g[key] for g in self._groups]
+        if isinstance(children[0], h5py.Group):
+            return MultiFileGroup(children, self._fnames)
+        return MultiFileDataset(children, self._fnames)
+
 # def multiplot(n_cols_rows, plotnames, datas : dict, filename : dict, labels : dict, titles : dict):
 
 plot_count = 0
-def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : bool = False):
+def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : bool = False, transpose : bool = False):
     """ Plots a data array of shape (K,N), where K is the number of data points per series and
     N is the number of data series. I.e. 12 joint positions evolving over 100 timesteps
     would be a data array of shape (100,12).
@@ -54,6 +98,9 @@ def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : 
         (min, max) limits for the x axis, by default None (auto).
     print_raw : bool, optional
         If True, also print each series' raw values to stdout, by default False.
+    transpose : bool, optional
+        If True, transpose data before plotting, i.e. treat it as shape (N,K) instead of
+        (K,N), by default False.
     """
     print(f"plotting data with shape {data.shape}")
 
@@ -65,6 +112,8 @@ def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : 
     ax.set_title(title)
     if len(data.shape)==1:
         data = np.expand_dims(data,1)
+    if transpose:
+        data = data.T
     series_num = data.shape[1]
     if labels is None:
         labels = [f"{i}" for i in range(series_num)]
@@ -146,7 +195,7 @@ def plot(data, labels = None, title : str = "HDF5Plot", xlims=None, print_raw : 
     on_resize(None)
 
 hist_count = 0
-def hist(data, title : str = "HDF5Plot", bins : int = 50, xlims=None, print_raw : bool = False):
+def hist(data, title : str = "HDF5Plot", bins : int = 50, xlims=None, print_raw : bool = False, transpose : bool = False, logy : bool = False, step : bool = False):
     """ Plots a histogram of a data array, in the wandb style: for a 2D input of shape (K,N)
     (K timesteps, N values per timestep), a histogram over the N values is computed at each
     of the K timesteps and the result is displayed as a heatmap, with time on the x axis,
@@ -168,6 +217,16 @@ def hist(data, title : str = "HDF5Plot", bins : int = 50, xlims=None, print_raw 
         (min, max) limits for the value axis the histogram bins span, by default None (auto).
     print_raw : bool, optional
         If True, also print the raw data to stdout, by default False.
+    transpose : bool, optional
+        If True, transpose data before plotting, i.e. treat it as shape (N,K) instead of
+        (K,N), by default False.
+    logy : bool, optional
+        If True, use a log-scaled y axis (the value axis for the heatmap, the count axis for
+        the plain histogram), by default False.
+    step : bool, optional
+        If True (and there is more than one timestep), show a single timestep's histogram at a
+        time instead of the heatmap, with a slider, the left/right arrow keys and the mouse
+        wheel all available to step through timesteps, by default False.
     """
     print(f"plotting histogram of data with shape {data.shape}")
 
@@ -180,33 +239,97 @@ def hist(data, title : str = "HDF5Plot", bins : int = 50, xlims=None, print_raw 
 
     if len(data.shape) == 1:
         data = np.expand_dims(data, 0)
+    if transpose:
+        data = data.T
     timesteps_num = data.shape[0]
     vmin, vmax = xlims if xlims is not None else (float(np.min(data)), float(np.max(data)))
 
+    use_tight_layout = True
     if timesteps_num == 1:
         ax.hist(data[0], bins=bins, range=(vmin, vmax))
         ax.set_xlabel("value")
         ax.set_ylabel("count")
+        if logy:
+            ax.set_yscale("log")
+    elif step:
+        use_tight_layout = False
+        bin_edges = np.linspace(vmin, vmax, bins + 1)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        bin_width = bin_edges[1] - bin_edges[0]
+        counts = np.stack([np.histogram(data[t], bins=bin_edges)[0] for t in range(timesteps_num)])
+        max_count = counts.max() if counts.size else 1
+
+        bars = ax.bar(bin_centers, counts[0], width=bin_width, align="center")
+        ax.set_xlabel("value")
+        ax.set_ylabel("count")
+        ax.set_ylim(0, max_count*1.05 if max_count > 0 else 1)
+        if logy:
+            ax.set_yscale("log")
+
+        current_t = [0]
+        def redraw(t):
+            for bar, h in zip(bars, counts[t]):
+                bar.set_height(h)
+            ax.set_title(f"{title} - timestep {t}/{timesteps_num-1}")
+            fig.canvas.draw_idle()
+        redraw(0)
+
+        fig.subplots_adjust(bottom=0.2)
+        slider_ax = fig.add_axes([0.2, 0.05, 0.6, 0.03])
+        slider = matplotlib.widgets.Slider(slider_ax, "Timestep", 0, timesteps_num-1, valinit=0, valstep=1)
+        def on_slider(val):
+            current_t[0] = int(slider.val)
+            redraw(current_t[0])
+        slider.on_changed(on_slider)
+
+        def set_t(t):
+            t = max(0, min(timesteps_num-1, t))
+            if t != current_t[0]:
+                current_t[0] = t
+                slider.eventson = False
+                slider.set_val(t)
+                slider.eventson = True
+                redraw(t)
+
+        def on_key(event : matplotlib.backend_bases.KeyEvent):
+            if event.key == "right":
+                set_t(current_t[0]+1)
+            elif event.key == "left":
+                set_t(current_t[0]-1)
+        fig.canvas.mpl_connect("key_press_event", on_key)
+
+        def on_scroll(event : matplotlib.backend_bases.MouseEvent):
+            if event.button == "up":
+                set_t(current_t[0]+1)
+            elif event.button == "down":
+                set_t(current_t[0]-1)
+        fig.canvas.mpl_connect("scroll_event", on_scroll)
+
+        fig._hdf5plot_slider = slider  # keep a reference alive, otherwise the slider stops responding
     else:
         bin_edges = np.linspace(vmin, vmax, bins + 1)
         heatmap = np.stack([np.histogram(data[t], bins=bin_edges)[0] for t in range(timesteps_num)], axis=1)
-        im = ax.imshow(heatmap, origin="lower", aspect="auto",
+        im = ax.imshow(heatmap, origin="lower", aspect="auto", interpolation="nearest",
                         extent=(0, timesteps_num, vmin, vmax), cmap="viridis")
         fig.colorbar(im, ax=ax, label="count")
         ax.set_xlabel("timestep")
         ax.set_ylabel("value")
+        if logy:
+            ax.set_yscale("log")
 
     if print_raw:
         np.set_printoptions(precision=3, suppress=True)
         print("raw data:")
         print(data)
 
-    def on_resize(event):
-        fig.set_layout_engine('constrained')
-        fig.canvas.draw()
-    fig.canvas.mpl_connect('resize_event', on_resize)
+    if use_tight_layout:
+        # Unlike plot(), there is no legend placed outside the axes here, so there is no need
+        # for the 'constrained' layout engine (which, combined with the colorbar's own gridspec,
+        # can hit a matplotlib ZeroDivisionError while the window is being resized). A plain
+        # one-shot tight_layout is enough to fit the colorbar and labels. Skipped in step mode,
+        # where the slider axes are placed manually with subplots_adjust().
+        fig.tight_layout()
     fig.show()
-    on_resize(None)
 
 def cmd_cd(file, current_path, *args, **kwargs):
     """ Move into a the dataset structure as if it was a folder structure. \
@@ -266,8 +389,9 @@ def cmd_info(file, current_path, *args, **kwargs):
 
 def _select_field_data(file, current_path, argument_groups, lims_arg_name="--xlims="):
     """ Shared field/column selection and slicing logic used by cmd_plot and cmd_hist.
-    Resolves each argument group to a field (by exact match or unambiguous prefix), applies
-    the requested column slicing, and resolves the field's labels if available.
+    Resolves each argument group to a field (by exact match or unambiguous prefix), optionally
+    transposes it (if a '--transpose' flag is present), applies the requested column slicing,
+    and resolves the field's labels if available.
     Returns a dict field -> (data, labels, lims), or None if a field could not be resolved
     (an error has already been printed in that case, and the caller should just return). """
     fields_tbd = {}
@@ -290,18 +414,23 @@ def _select_field_data(file, current_path, argument_groups, lims_arg_name="--xli
         data = np.array(recdict_access(file, current_path+[field]))
         if len(data.shape) == 1:
             data = np.expand_dims(data,1)
+        if "--transpose" in args[1:]:
+            data = data.T
         cols_num = data.shape[1]
         columns = None
         lims = None
         if len(args)>=2:
-            columns = []
             for arg in args[1:]:
+                if arg == "--transpose":
+                    continue
                 if arg.startswith("--"):
                     if arg.startswith(lims_arg_name):
-                        lims = [int(l) for l in arg[len(lims_arg_name):].split(",")]
+                        lims = [float(l) for l in arg[len(lims_arg_name):].split(",")]
                     else:
                         print(f"Unrecognized arg {arg}")
                 else:
+                    if columns is None:
+                        columns = []
                     groups = arg.split(",") # e.g. "1:4,7:9,11,12" gets split in ["1:4","7:9","11","12"]
                     for g in groups:
                         if ":" in g:
@@ -347,7 +476,9 @@ def _select_field_data(file, current_path, argument_groups, lims_arg_name="--xli
 def cmd_plot(file, current_path, *args, **kwargs):
     """ Plot a data element. For example 'plot state_robot 0:96:8+2 --xlims=-1,30' plots from state_robot a
         slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...), with x axis limits -1 and 30.
-        You can plot multiple data from multiple fields at once, e.g. 'plot state_robot 0:96:8+2 ; state_goal 0'. """
+        You can plot multiple data from multiple fields at once, e.g. 'plot state_robot 0:96:8+2 ; state_goal 0'.
+        Add '--transpose' to swap rows and columns before slicing, for fields stored as (series,points)
+        instead of the expected (points,series), e.g. 'plot state_robot --transpose 0:12'. """
     if len(args) < 1:
         print(f"Argument missing for plot.")
 
@@ -383,9 +514,29 @@ def cmd_hist(file, current_path, *args, **kwargs):
         otherwise a normal histogram is shown. For example 'hist state_robot 0:96:8+2 --xlims=-1,30'
         histograms state_robot's slice from 0 to 96 with stride 8 and an offset of 2 (i.e. 2,10,18,...),
         with value axis limits -1 and 30. You can combine data from multiple fields into the same
-        histogram at once, e.g. 'hist state_robot 0:96:8+2 ; state_goal 0'. """
+        histogram at once, e.g. 'hist state_robot 0:96:8+2 ; state_goal 0'. Add '--transpose' to
+        swap rows and columns before slicing, for fields stored as (series,points) instead of the
+        expected (points,series), e.g. 'hist state_robot --transpose 0:12'. Add '--bins=<n>' to set
+        the number of histogram bins (default 50), '--logy' for a log-scaled y axis, and '--step'
+        to show one timestep's histogram at a time (scrub with the slider, left/right arrow keys,
+        or the mouse wheel) instead of the heatmap. """
     if len(args) < 1:
         print(f"Argument missing for hist.")
+
+    bins = 50
+    logy = False
+    step = False
+    remaining_args = []
+    for arg in args:
+        if arg.startswith("--bins="):
+            bins = int(arg[len("--bins="):])
+        elif arg == "--logy":
+            logy = True
+        elif arg == "--step":
+            step = True
+        else:
+            remaining_args.append(arg)
+    args = remaining_args
 
     argument_groups = [list(y) for x, y in itertools.groupby(args, lambda z: z.strip() == ";") if not x]
     hists_tbd = _select_field_data(file, current_path, argument_groups, lims_arg_name="--xlims=")
@@ -404,8 +555,10 @@ def cmd_hist(file, current_path, *args, **kwargs):
         all_xlims = hist_tbd[2]
     hist(all_data,
         title = os.path.basename(kwargs["filename"])+"/["+",".join(current_path+all_fields)+"]",
+        bins=bins,
         xlims=all_xlims,
-        print_raw = False)
+        print_raw = False,
+        logy=logy)
     return current_path, True
 
 img_count = 0
@@ -557,22 +710,59 @@ def read_zip_member_with_progress(zf : zipfile.ZipFile, member_name : str, chunk
             print_progress(read, total)
     return b"".join(chunks)
 
+def _open_source(fname : str):
+    """ Returns (file_obj, driver) suitable for h5py.File(file_obj, "r", driver=driver),
+    transparently reading the 'data.hdf5' member out of fname if it is a zip file. """
+    if zipfile.is_zipfile(fname):
+        with zipfile.ZipFile(fname, "r") as zf:
+            data = read_zip_member_with_progress(zf, "data.hdf5")
+        return io.BytesIO(data), "fileobj"
+    return fname, None
+
 history_file = os.path.abspath(os.path.expanduser("~/.hdf5plot/.cmd_history.txt"))
 def main():
     try:
         ap = argparse.ArgumentParser()
         ap.add_argument("--file", default = None, type=str, help="File to open")
-        ap.add_argument("file", nargs='?', default = None, type=str, help="File to open")
+        ap.add_argument("files", nargs='*', default = [], type=str,
+                         help="File(s) to open. Give multiple files, or a glob pattern like "
+                              "'rnd_log_*.hdf5' (quote it to let this tool expand it, or leave "
+                              "it unquoted to let the shell expand it), to open them together as "
+                              "one merged multi-file view: each field's array is stacked across "
+                              "files along a new leading axis (one row per file, sorted by "
+                              "filename). This lets a field logged once per snapshot file (e.g. "
+                              "a periodic RND log) be plotted/histogrammed across all snapshots "
+                              "at once with a single command.")
 
         ap.set_defaults(feature=True)
         args = vars(ap.parse_args())
 
-        fname = args["file"]
-        if fname is None:
-            print(f"Not input file provided.")
+        raw_tokens = list(args["files"])
+        if args["file"]:
+            raw_tokens.append(args["file"])
+        if len(raw_tokens) == 0:
+            print(f"No input file provided.")
             input("Press ENTER to exit.")
             exit(0)
-        print("\33]0;HDF5 Plot - "+fname.split("/")[-1]+"\a")
+
+        fnames = []
+        for token in raw_tokens:
+            token = os.path.expanduser(token)
+            if any(c in token for c in "*?["):
+                matches = glob.glob(token)
+                if not matches:
+                    print(f"No files match '{token}'")
+                    input("Press ENTER to exit.")
+                    exit(0)
+                fnames += matches
+            else:
+                fnames.append(token)
+        fnames = sorted(set(fnames))
+        multi_file = len(fnames) > 1
+        fname_display = fnames[0] if not multi_file else \
+            f"{os.path.basename(fnames[0])}..{os.path.basename(fnames[-1])} [{len(fnames)} files]"
+
+        print("\33]0;HDF5 Plot - "+fname_display+"\a")
         current_path = []
         running = True
         cmds = {"cd" : cmd_cd,
@@ -588,19 +778,17 @@ def main():
                 "info" : cmd_info,
                 "help" : cmd_help}
 
-        file_obj = fname
-        inner_name = None
-        driver = None
-        if zipfile.is_zipfile(fname):
-            with zipfile.ZipFile(fname, "r") as zf:
-                data = read_zip_member_with_progress(zf, "data.hdf5")
-            file_obj = io.BytesIO(data)
-            driver = "fileobj"
+        with contextlib.ExitStack() as stack:
+            files = []
+            for fn in fnames:
+                file_obj, driver = _open_source(fn)
+                files.append(stack.enter_context(h5py.File(file_obj, "r", driver=driver)))
+            f = files[0] if not multi_file else MultiFileGroup(files, fnames)
 
-
-        with h5py.File(file_obj, "r", driver=driver) as f:
-            opened_msg = fname if inner_name is None else f"{fname} (inner: {inner_name})"
-            print(f"Opened file {opened_msg}")
+            if multi_file:
+                print(f"Opened {len(fnames)} files ({fname_display})")
+            else:
+                print(f"Opened file {fname_display}")
             print(f"Content:")
             print(list(recdict_access(f, current_path).keys()))
             cmd_help(f,current_path,cmds = cmds)
@@ -664,7 +852,7 @@ def main():
                 if cmd_func != None:
                     kwargs = {}
                     kwargs["cmds"] = cmds
-                    kwargs["filename"] = fname
+                    kwargs["filename"] = fname_display
                     try:
                         current_path, running = cmd_func(f,current_path, *cmd_args, **kwargs)
                     except Exception as e:
