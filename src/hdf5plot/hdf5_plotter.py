@@ -558,7 +558,8 @@ def cmd_hist(file, current_path, *args, **kwargs):
         bins=bins,
         xlims=all_xlims,
         print_raw = False,
-        logy=logy)
+        logy=logy,
+        step=step)
     return current_path, True
 
 img_count = 0
@@ -695,11 +696,18 @@ def print_progress(current : int, total : int, prefix : str = "Loading", bar_len
     if current >= total:
         print()
 
-def read_zip_member_with_progress(zf : zipfile.ZipFile, member_name : str, chunk_size : int = 4*1024*1024) -> bytes:
-    total = zf.getinfo(member_name).file_size
+def read_zip_member_with_progress(zf : zipfile.ZipFile, member_name : str, chunk_size : int = 4*1024*1024,
+                                   progress_total : int = None, progress_offset : int = 0) -> bytes:
+    """ Reads member_name out of zf in chunks, printing a progress bar. By default the bar spans
+    just this member (0 to its own size). Pass progress_total/progress_offset to make it part of
+    a larger bar spanning multiple files (e.g. when opening several zip-wrapped hdf5 files at
+    once): progress_total is the combined size across all files, and progress_offset is how many
+    of those bytes have already been accounted for by files read before this one. """
+    size = zf.getinfo(member_name).file_size
+    total = progress_total if progress_total is not None else size
     read = 0
     chunks = []
-    print_progress(read, total)
+    print_progress(progress_offset, total)
     with zf.open(member_name) as member:
         while True:
             chunk = member.read(chunk_size)
@@ -707,15 +715,27 @@ def read_zip_member_with_progress(zf : zipfile.ZipFile, member_name : str, chunk
                 break
             chunks.append(chunk)
             read += len(chunk)
-            print_progress(read, total)
+            print_progress(progress_offset+read, total)
     return b"".join(chunks)
 
-def _open_source(fname : str):
-    """ Returns (file_obj, driver) suitable for h5py.File(file_obj, "r", driver=driver),
-    transparently reading the 'data.hdf5' member out of fname if it is a zip file. """
+def _zip_member_size(fname : str) -> int:
+    """ Size in bytes of the 'data.hdf5' member inside fname if it's a zip file, else 0 (plain
+    hdf5 files are opened directly by h5py with no separate extraction/progress step). Used to
+    size an overall progress bar when opening multiple files together. """
     if zipfile.is_zipfile(fname):
         with zipfile.ZipFile(fname, "r") as zf:
-            data = read_zip_member_with_progress(zf, "data.hdf5")
+            return zf.getinfo("data.hdf5").file_size
+    return 0
+
+def _open_source(fname : str, progress_total : int = None, progress_offset : int = 0):
+    """ Returns (file_obj, driver) suitable for h5py.File(file_obj, "r", driver=driver),
+    transparently reading the 'data.hdf5' member out of fname if it is a zip file. See
+    read_zip_member_with_progress for progress_total/progress_offset, used to make the progress
+    bar span multiple files instead of restarting at 0% for each one. """
+    if zipfile.is_zipfile(fname):
+        with zipfile.ZipFile(fname, "r") as zf:
+            data = read_zip_member_with_progress(zf, "data.hdf5",
+                                                  progress_total=progress_total, progress_offset=progress_offset)
         return io.BytesIO(data), "fileobj"
     return fname, None
 
@@ -780,8 +800,13 @@ def main():
 
         with contextlib.ExitStack() as stack:
             files = []
-            for fn in fnames:
-                file_obj, driver = _open_source(fn)
+            zip_sizes = [_zip_member_size(fn) for fn in fnames]
+            total_bytes = sum(zip_sizes)
+            bytes_so_far = 0
+            for fn, size in zip(fnames, zip_sizes):
+                file_obj, driver = _open_source(fn, progress_total=total_bytes if total_bytes > 0 else None,
+                                                 progress_offset=bytes_so_far)
+                bytes_so_far += size
                 files.append(stack.enter_context(h5py.File(file_obj, "r", driver=driver)))
             f = files[0] if not multi_file else MultiFileGroup(files, fnames)
 
