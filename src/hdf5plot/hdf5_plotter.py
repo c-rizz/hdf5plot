@@ -22,6 +22,7 @@ import itertools
 import zipfile
 import glob
 import contextlib
+import importlib.metadata
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -742,6 +743,12 @@ def _open_source(fname : str, progress_total : int = None, progress_offset : int
 history_file = os.path.abspath(os.path.expanduser("~/.hdf5plot/.cmd_history.txt"))
 def main():
     try:
+        try:
+            version = importlib.metadata.version("hdf5plot")
+        except importlib.metadata.PackageNotFoundError:
+            version = "unknown"
+        print(f"HDF5Plot - version {version}")
+
         ap = argparse.ArgumentParser()
         ap.add_argument("--file", default = None, type=str, help="File to open")
         ap.add_argument("files", nargs='*', default = [], type=str,
