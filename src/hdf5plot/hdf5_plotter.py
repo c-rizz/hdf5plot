@@ -626,8 +626,8 @@ def cmd_img(file, current_path, *args, **kwargs):
         with 1 channel, 64 height and 64 width. \
         By default pixel values are scaled using the data's own min/max. Use --range=0,1 or \
         --range=0,255 (or any other pair of values) to set the scaling explicitly. """
-    if len(args) < 2:
-        print(f"Usage: img <field> <channels>x<height>x<width> [--range=<min>,<max>]")
+    if len(args) < 1:
+        print(f"Usage: img <field> [<channels>x<height>x<width>] [--range=<min>,<max>]")
         return current_path, True
     available_fields = recdict_access(file, current_path).keys()
     field = args[0]
@@ -638,15 +638,9 @@ def cmd_img(file, current_path, *args, **kwargs):
         else:
             print(f"Possible fields = " + (" ; ".join(matches)))
             return current_path, True
-    sep = "x" if "x" in args[1] else ","
-    try:
-        c, h, w = [int(s) for s in args[1].split(sep)]
-    except ValueError:
-        print(f"Invalid shape '{args[1]}', expected e.g. 1x64x64")
-        return current_path, True
 
     vmin, vmax = None, None
-    for arg in args[2:]:
+    for arg in args[1:]:
         if arg.startswith("--range="):
             vrange = arg[len("--range="):].split(",")
             if len(vrange) != 2:
@@ -656,14 +650,25 @@ def cmd_img(file, current_path, *args, **kwargs):
         else:
             print(f"Unrecognized arg {arg}")
 
-    data = np.array(recdict_access(file, current_path+[field]))
-    if data.ndim == 1:
-        data = np.expand_dims(data, 0)
-    frame_size = c*h*w
-    if data.shape[-1] != frame_size:
-        print(f"Field '{field}' last dim is {data.shape[-1]}, doesn't match {c}x{h}x{w} = {frame_size}")
+    sep = "x" if "x" in args[1] else ","
+    try:
+        c, h, w = [int(s) for s in args[1].split(sep)]
+    except ValueError:
+        print(f"Invalid shape '{args[1]}', expected e.g. 1x64x64")
         return current_path, True
-    frames = data.reshape(data.shape[0], c, h, w)
+    
+    data = np.array(recdict_access(file, current_path+[field]))
+    print(f"selected {field} with shape {data.shape}")
+    if data.shape[1:] != (c,h,w):
+        if data.ndim == 1:
+            data = np.expand_dims(data, 0)
+        frame_size = c*h*w
+        if data.shape[-1] != frame_size:
+            print(f"Field '{field}' last dim is {data.shape[-1]}, doesn't match {c}x{h}x{w} = {frame_size}")
+            return current_path, True
+        frames = data.reshape(data.shape[0], c, h, w)
+    else:
+        frames = data
     show_frames(frames,
         title=os.path.basename(kwargs["filename"])+"/["+",".join(current_path+[field])+"]",
         vmin=vmin, vmax=vmax)
