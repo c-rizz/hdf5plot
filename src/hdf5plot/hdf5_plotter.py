@@ -354,12 +354,16 @@ def cmd_cd(file, current_path, *args, **kwargs):
 
 def cmd_ls(file, current_path, *args, **kwargs):
     prefix = args[0] if len(args)>0 else ""
-    ks = recdict_access(file, current_path).keys()
-    max_k_len = max([len(k) for k in ks]) 
-    ks = [(str(k)).rjust(max_k_len) for k in ks]
+    ks = [str(k) for k in recdict_access(file, current_path).keys()]
     ks = [k for k in ks if k.strip().startswith(prefix.strip())]
-    elements_per_row = int(shutil.get_terminal_size().columns/max_k_len)
-    print('\n'.join([''.join(ks[p:p+elements_per_row]) for p in range(0,len(ks), elements_per_row)]))
+    if len(ks) == 0:
+        return current_path, True
+    max_k_len = max(len(k) for k in ks)
+    gap = 2
+    col_width = max_k_len + gap
+    ks = [k.rjust(max_k_len).ljust(col_width) for k in ks]
+    elements_per_row = max(1, shutil.get_terminal_size().columns // col_width)
+    print('\n'.join(''.join(ks[p:p+elements_per_row]).rstrip() for p in range(0, len(ks), elements_per_row)))
     return current_path, True
 
 def cmd_quit(file, current_path, *args, **kwargs):
